@@ -22,7 +22,7 @@ namespace Instruction
 
 struct Token
 {
-	enum Type { EMPTY, NUMBER, OPERATOR };
+	enum Type { EMPTY, NUMBER, OPERATOR, LEFT_PARENTHESIS, RIGHT_PARENTHESIS };
 	Type type;
 
 	enum Operator {
@@ -47,8 +47,8 @@ public:
 	float evaluate(const uint8* code);
 	int tokenize(const char* src, Token* tokens, int max_size);
 	int compile(const char* src, const Token* tokens, int token_count, uint8* byte_code, int max_size);
-	void toPostfix(const Token* input, Token* output, int count);
-
+	int toPostfix(const Token* input, Token* output, int count);
+	float compileAndRun(const char* src);
 
 private:
 	template<typename T>
@@ -125,11 +125,26 @@ float ExpressionVM::evaluate(const uint8* code)
 }
 
 
-void ExpressionVM::toPostfix(const Token* input, Token* output, int count)
+float ExpressionVM::compileAndRun(const char* src)
+{
+	static const int MAX_TOKENS_COUNT = 50;
+	static const int MAX_BYTECODE_SIZE = 50;
+	uint8 byte_code[MAX_BYTECODE_SIZE];
+	Token tokens[MAX_TOKENS_COUNT];
+	Token postfix_tokens[MAX_TOKENS_COUNT];
+	int tokens_count = tokenize(src, tokens, MAX_TOKENS_COUNT);
+	int postfix_tokens_count = toPostfix(tokens, postfix_tokens, tokens_count);
+	compile(src, postfix_tokens, postfix_tokens_count, byte_code, MAX_BYTECODE_SIZE);
+	return evaluate(byte_code);
+}
+
+
+int ExpressionVM::toPostfix(const Token* input, Token* output, int count)
 {
 	Token func_stack[64];
 	int func_stack_idx = 0;
 	Token* out = output;
+	int out_token_count = count;
 	for(int i = 0; i < count; ++i)
 	{
 		const Token& token = input[i];
@@ -138,14 +153,32 @@ void ExpressionVM::toPostfix(const Token* input, Token* output, int count)
 			*out = token;
 			++out;
 		}
+		else if (token.type == Token::LEFT_PARENTHESIS)
+		{
+			--out_token_count;
+			func_stack[func_stack_idx] = token;
+			++func_stack_idx;
+		}
+		else if (token.type == Token::RIGHT_PARENTHESIS)
+		{
+			--out_token_count;
+			while (func_stack_idx > 0 && func_stack[func_stack_idx - 1].type != Token::LEFT_PARENTHESIS)
+			{
+				--func_stack_idx;
+				*out = func_stack[func_stack_idx];
+				++out;
+			}
+
+			if (func_stack_idx > 0) --func_stack_idx;
+		}
 		else
 		{
 			int prio = getOperatorPriority(token);
 			while(func_stack_idx > 0 && getOperatorPriority(func_stack[func_stack_idx - 1]) > prio)
 			{
-				*out = func_stack[func_stack_idx - 1];
-				++out;
 				--func_stack_idx;
+				*out = func_stack[func_stack_idx];
+				++out;
 			}
 
 			func_stack[func_stack_idx] = token;
@@ -158,6 +191,7 @@ void ExpressionVM::toPostfix(const Token* input, Token* output, int count)
 		*out = func_stack[i];
 		++out;
 	}
+	return out_token_count;
 }
 
 
@@ -200,10 +234,18 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 {
 	const char* c = src;
 	int token_count = 0;
-	while(*c)
+	while (*c)
 	{
 		Token token = { Token::EMPTY, c - src };
-		if(*c >= '0' && *c <= '9')
+		if (*c == '(')
+		{
+			token.type = Token::LEFT_PARENTHESIS;
+		}
+		else if (*c == ')')
+		{
+			token.type = Token::RIGHT_PARENTHESIS;
+		}
+		else if (*c >= '0' && *c <= '9')
 		{
 			token.type = Token::NUMBER;
 			char* out;
@@ -286,17 +328,30 @@ TEST_CASE("Compile", "Compile source to bytecode") {
 	REQUIRE(vm.tokenize(src, tokens, MAX_TOKENS) == MAX_TOKENS);
 
 	Token postfix_tokens[MAX_TOKENS];
-	vm.toPostfix(tokens, postfix_tokens, MAX_TOKENS);
+	int postfix_tokens_count = vm.toPostfix(tokens, postfix_tokens, MAX_TOKENS);
 
 	static const int BYTE_CODE_SIZE = 150;
 	uint8 byte_code[BYTE_CODE_SIZE];
 
-	int size = vm.compile(src, postfix_tokens, sizeof(postfix_tokens) / sizeof(postfix_tokens[0]), byte_code, BYTE_CODE_SIZE);
-	CHECK(size == 22);
+	int size = vm.compile(src, postfix_tokens, postfix_tokens_count, byte_code, BYTE_CODE_SIZE);
+	CHECK(size == 24);
 
 	float x = vm.evaluate(byte_code);
 	CHECK(x == Approx(40.0f));
 }
+
+
+TEST_CASE("Compile & Run", "Compile source to bytecode and run it") {
+	ExpressionVM vm;
+	CHECK(vm.compileAndRun("4.5 + 10 * 3 + 5.5") == Approx(40.0f));
+	CHECK(vm.compileAndRun("(4.5 + 10) * 3 + 5.5") == Approx(49.0f));
+	CHECK(vm.compileAndRun("4.5 + (10 * 3) + 5.5") == Approx(40.0f));
+	CHECK(vm.compileAndRun("4.5 + 10 * (3 + 5.5)") == Approx(89.5f));
+	CHECK(vm.compileAndRun("(4.5 + 10 * 3 + 5.5)") == Approx(40.0f));
+	CHECK(vm.compileAndRun("(4.5 + 10 * 3) + 5.5") == Approx(40.0f));
+	CHECK(vm.compileAndRun("4.5 + (10 * 3 + 5.5)") == Approx(40.0f));
+}
+
 
 
 TEST_CASE("Run", "Execute bytecode") {
