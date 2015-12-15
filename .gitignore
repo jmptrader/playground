@@ -28,3 +28,4 @@
 *.app
 
 projects/tmp/
+!projects/genie.exe
