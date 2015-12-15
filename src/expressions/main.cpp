@@ -15,7 +15,9 @@ namespace Instruction
 		ADD_FLOAT,
 		MUL_FLOAT,
 		DIV_FLOAT,
-		RET_FLOAT
+		RET_FLOAT,
+		SUB_FLOAT,
+		UNARY_MINUS
 	};
 }
 
@@ -28,7 +30,9 @@ struct Token
 	enum Operator {
 		ADD,
 		MULTIPLY,
-		DIVIDE
+		DIVIDE,
+		SUBTRACT,
+		UNARY_MINUS
 	};
 
 	int offset;
@@ -82,8 +86,10 @@ private:
 		switch(token.oper)
 		{
 			case Token::ADD: return 0;
+			case Token::SUBTRACT: return 0;
 			case Token::MULTIPLY: return 1;
 			case Token::DIVIDE: return 1;
+			case Token::UNARY_MINUS: return 1;
 		}
 		return -1;
 	}
@@ -110,6 +116,9 @@ float ExpressionVM::evaluate(const uint8* code)
 			case Instruction::ADD_FLOAT:
 				push<float>(pop<float>() + pop<float>());
 				break;
+			case Instruction::SUB_FLOAT:
+				push<float>(-pop<float>() + pop<float>());
+				break;
 			case Instruction::PUSH_FLOAT:
 				cp = pushStackConst<float>(cp);
 				break;
@@ -121,6 +130,9 @@ float ExpressionVM::evaluate(const uint8* code)
 					float f = pop<float>();
 					push<float>(pop<float>() / f);
 				}
+				break;
+			case Instruction::UNARY_MINUS:
+				push<float>(-pop<float>());
 				break;
 			default:
 				DebugBreak();
@@ -222,6 +234,8 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 					case Token::ADD: *out = Instruction::ADD_FLOAT; ++out; break;
 					case Token::MULTIPLY: *out = Instruction::MUL_FLOAT; ++out; break;
 					case Token::DIVIDE: *out = Instruction::DIV_FLOAT; ++out; break;
+					case Token::SUBTRACT: *out = Instruction::SUB_FLOAT; ++out; break;
+					case Token::UNARY_MINUS: *out = Instruction::UNARY_MINUS; ++out; break;
 				}
 				break;
 			default:
@@ -240,16 +254,20 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 {
 	const char* c = src;
 	int token_count = 0;
+	bool binary = false;
 	while (*c)
 	{
 		Token token = { Token::EMPTY, c - src };
 		if (*c == '(')
 		{
+			binary = false;
 			token.type = Token::LEFT_PARENTHESIS;
 		}
 		else if (*c == ')')
 		{
+			binary = false;
 			token.type = Token::RIGHT_PARENTHESIS;
+			binary = true;
 		}
 		else if (*c >= '0' && *c <= '9')
 		{
@@ -257,14 +275,32 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 			char* out;
 			token.number = strtof(c, &out);
 			c = out-1;
+			binary = true;
 		}
 		else
 		{
 			switch(*c)
 			{
-				case '+': token.type = Token::OPERATOR; token.oper = Token::ADD; break;
-				case '*': token.type = Token::OPERATOR; token.oper = Token::MULTIPLY; break;
-				case '/': token.type = Token::OPERATOR; token.oper = Token::DIVIDE; break;
+				case '+':
+					token.type = Token::OPERATOR;
+					token.oper = Token::ADD;
+					binary = false;
+					break;
+				case '*':
+					token.type = Token::OPERATOR;
+					token.oper = Token::MULTIPLY;
+					binary = false;
+					break;
+				case '/':
+					token.type = Token::OPERATOR;
+					token.oper = Token::DIVIDE;
+					binary = false;
+					break;
+				case '-':
+					token.type = Token::OPERATOR;
+					token.oper = binary ? Token::SUBTRACT : Token::UNARY_MINUS;
+					binary = false;
+					break;
 			}
 		}
 		if(token.type != Token::EMPTY)
@@ -350,17 +386,36 @@ TEST_CASE("Compile", "Compile source to bytecode") {
 
 TEST_CASE("Compile & Run", "Compile source to bytecode and run it") {
 	ExpressionVM vm;
-	CHECK(vm.compileAndRun("4.5 + 10 * 3 + 5.5") == Approx(40.0f));
-	CHECK(vm.compileAndRun("(4.5 + 10) * 3 + 5.5") == Approx(49.0f));
-	CHECK(vm.compileAndRun("4.5 + (10 * 3) + 5.5") == Approx(40.0f));
-	CHECK(vm.compileAndRun("4.5 + 10 * (3 + 5.5)") == Approx(89.5f));
-	CHECK(vm.compileAndRun("(4.5 + 10 * 3 + 5.5)") == Approx(40.0f));
-	CHECK(vm.compileAndRun("(4.5 + 10 * 3) + 5.5") == Approx(40.0f));
-	CHECK(vm.compileAndRun("4.5 + (10 * 3 + 5.5)") == Approx(40.0f));
+	SECTION("Multiplication & addition") {
+		CHECK(vm.compileAndRun("4.5 + 10 * 3 + 5.5") == Approx(40.0f));
+		CHECK(vm.compileAndRun("(4.5 + 10) * 3 + 5.5") == Approx(49.0f));
+		CHECK(vm.compileAndRun("4.5 + (10 * 3) + 5.5") == Approx(40.0f));
+		CHECK(vm.compileAndRun("4.5 + 10 * (3 + 5.5)") == Approx(89.5f));
+		CHECK(vm.compileAndRun("(4.5 + 10 * 3 + 5.5)") == Approx(40.0f));
+		CHECK(vm.compileAndRun("(4.5 + 10 * 3) + 5.5") == Approx(40.0f));
+		CHECK(vm.compileAndRun("4.5 + (10 * 3 + 5.5)") == Approx(40.0f));
+	}
 
-	CHECK(vm.compileAndRun("5 / 2") == Approx(2.5f));
-	CHECK(vm.compileAndRun("2.5 / 2") == Approx(1.25f));
-	CHECK(vm.compileAndRun("1 / 2.0") == Approx(0.5f));
+	SECTION("Subtraction") {
+		CHECK(vm.compileAndRun("4.5 - 2") == Approx(2.5f));
+		CHECK(vm.compileAndRun("4.5 - 5") == Approx(-0.5f));
+		CHECK(vm.compileAndRun("2 * (4.5 - 5)") == Approx(-1.0f));
+	}
+	
+	SECTION("Unary minus") {
+		CHECK(vm.compileAndRun("-1") == Approx(-1.0f));
+		CHECK(vm.compileAndRun("-1 * 5") == Approx(-5.0f));
+		CHECK(vm.compileAndRun("1 * -5") == Approx(-5.0f));
+		CHECK(vm.compileAndRun("-1 * -5") == Approx(5.0f));
+		CHECK(vm.compileAndRun("(-1) * -5") == Approx(5.0f));
+		CHECK(vm.compileAndRun("2 * (-1 * -5)") == Approx(10.0f));
+	}
+
+	SECTION("Division") {
+		CHECK(vm.compileAndRun("5 / 2") == Approx(2.5f));
+		CHECK(vm.compileAndRun("2.5 / 2") == Approx(1.25f));
+		CHECK(vm.compileAndRun("1 / 2.0") == Approx(0.5f));
+	}
 }
 
 
