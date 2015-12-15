@@ -17,4 +17,4 @@ All required 3rd party libraries are in directory 3rdparty.
 
 ## Contained projects
 
-* [expressions](Expressions - simple math parser and evaluator)
+* [Expressions - simple math parser and evaluator](src/expressions)
