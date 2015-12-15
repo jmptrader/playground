@@ -27,7 +27,8 @@ struct Token
 
 	enum Operator {
 		ADD,
-		MULTIPLY
+		MULTIPLY,
+		DIVIDE
 	};
 
 	int offset;
@@ -82,6 +83,7 @@ private:
 		{
 			case Token::ADD: return 0;
 			case Token::MULTIPLY: return 1;
+			case Token::DIVIDE: return 1;
 		}
 		return -1;
 	}
@@ -115,7 +117,10 @@ float ExpressionVM::evaluate(const uint8* code)
 				push<float>(pop<float>() * pop<float>());
 				break;
 			case Instruction::DIV_FLOAT:
-				push<float>(pop<float>() / pop<float>());
+				{
+					float f = pop<float>();
+					push<float>(pop<float>() / f);
+				}
 				break;
 			default:
 				DebugBreak();
@@ -212,10 +217,11 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 				out += sizeof(float);
 				break;
 			case Token::OPERATOR:
-				switch(src[token.offset])
+				switch(token.oper)
 				{
-					case '+': *out = Instruction::ADD_FLOAT; ++out; break;
-					case '*': *out = Instruction::MUL_FLOAT; ++out; break;
+					case Token::ADD: *out = Instruction::ADD_FLOAT; ++out; break;
+					case Token::MULTIPLY: *out = Instruction::MUL_FLOAT; ++out; break;
+					case Token::DIVIDE: *out = Instruction::DIV_FLOAT; ++out; break;
 				}
 				break;
 			default:
@@ -258,6 +264,7 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 			{
 				case '+': token.type = Token::OPERATOR; token.oper = Token::ADD; break;
 				case '*': token.type = Token::OPERATOR; token.oper = Token::MULTIPLY; break;
+				case '/': token.type = Token::OPERATOR; token.oper = Token::DIVIDE; break;
 			}
 		}
 		if(token.type != Token::EMPTY)
@@ -350,6 +357,10 @@ TEST_CASE("Compile & Run", "Compile source to bytecode and run it") {
 	CHECK(vm.compileAndRun("(4.5 + 10 * 3 + 5.5)") == Approx(40.0f));
 	CHECK(vm.compileAndRun("(4.5 + 10 * 3) + 5.5") == Approx(40.0f));
 	CHECK(vm.compileAndRun("4.5 + (10 * 3 + 5.5)") == Approx(40.0f));
+
+	CHECK(vm.compileAndRun("5 / 2") == Approx(2.5f));
+	CHECK(vm.compileAndRun("2.5 / 2") == Approx(1.25f));
+	CHECK(vm.compileAndRun("1 / 2.0") == Approx(0.5f));
 }
 
 
