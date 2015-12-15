@@ -55,6 +55,7 @@ public:
 	int toPostfix(const Token* input, Token* output, int count);
 	float compileAndRun(const char* src);
 
+
 private:
 	template<typename T>
 	T& pop()
