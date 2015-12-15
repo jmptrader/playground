@@ -20,21 +20,44 @@ namespace Instruction
 }
 
 
+struct Token
+{
+	enum Type { EMPTY, NUMBER, OPERATOR };
+	Type type;
+
+	enum Operator {
+		ADD,
+		MULTIPLY
+	};
+
+	int offset;
+
+	float number;
+	Operator oper;
+};
+
+
 class ExpressionVM
 {
-	public:
+public:
 	static const int STACK_SIZE = 50;
 
-	public:
-	float evaluate(const uint8* code);
 
-	private:
+public:
+	float evaluate(const uint8* code);
+	int tokenize(const char* src, Token* tokens, int max_size);
+	int compile(const char* src, const Token* tokens, int token_count, uint8* byte_code, int max_size);
+	void toPostfix(const Token* input, Token* output, int count);
+
+
+private:
 	template<typename T>
 	T& pop()
 	{
 		m_stack_pointer -= sizeof(T);
 		return *(T*)(m_stack + m_stack_pointer);
 	}
+
 
 	template <typename T>
 	const uint8* pushStackConst(const uint8* cp)
@@ -44,6 +67,7 @@ class ExpressionVM
 		return cp + sizeof(T);
 	}
 
+
 	template <typename T>
 	void push(T value)
 	{
@@ -51,7 +75,19 @@ class ExpressionVM
 		m_stack_pointer += sizeof(T);
 	}
 
-	private:
+
+	static int getOperatorPriority(const Token& token)
+	{
+		switch(token.oper)
+		{
+			case Token::ADD: return 0;
+			case Token::MULTIPLY: return 1;
+		}
+		return -1;
+	}
+
+
+private:
 	uint8 m_stack[STACK_SIZE];
 	int m_stack_pointer;
 };
@@ -89,8 +125,112 @@ float ExpressionVM::evaluate(const uint8* code)
 }
 
 
-#define CLOSE_EQ(f, a, e) \
-	if(!((f) > (a) - (e) && (f) < (a) + (e))) DebugBreak();
+void ExpressionVM::toPostfix(const Token* input, Token* output, int count)
+{
+	Token func_stack[64];
+	int func_stack_idx = 0;
+	Token* out = output;
+	for(int i = 0; i < count; ++i)
+	{
+		const Token& token = input[i];
+		if(token.type == Token::NUMBER)
+		{
+			*out = token;
+			++out;
+		}
+		else
+		{
+			int prio = getOperatorPriority(token);
+			while(func_stack_idx > 0 && getOperatorPriority(func_stack[func_stack_idx - 1]) > prio)
+			{
+				*out = func_stack[func_stack_idx - 1];
+				++out;
+				--func_stack_idx;
+			}
+
+			func_stack[func_stack_idx] = token;
+			++func_stack_idx;
+		}
+	}
+
+	for(int i = func_stack_idx - 1; i >= 0; --i)
+	{
+		*out = func_stack[i];
+		++out;
+	}
+}
+
+
+
+int ExpressionVM::compile(const char* src, const Token* tokens, int token_count, uint8* byte_code, int max_size)
+{
+	uint8* out = byte_code;
+	for(int i = 0; i < token_count; ++i)
+	{
+		auto& token = tokens[i];
+		switch(token.type)
+		{
+			case Token::NUMBER:
+				if (max_size - (out - byte_code) < sizeof(float) + 1) return out - byte_code;
+				*out = Instruction::PUSH_FLOAT;
+				++out;
+				*(float*)out = token.number;
+				out += sizeof(float);
+				break;
+			case Token::OPERATOR:
+				switch(src[token.offset])
+				{
+					case '+': *out = Instruction::ADD_FLOAT; ++out; break;
+					case '*': *out = Instruction::MUL_FLOAT; ++out; break;
+				}
+				break;
+			default:
+				DebugBreak();
+				break;
+		}
+	}
+	if (max_size - (out - byte_code) < 1) return out - byte_code;
+	*out = Instruction::RET_FLOAT;
+	++out;
+	return out - byte_code;
+}
+
+
+int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
+{
+	const char* c = src;
+	int token_count = 0;
+	while(*c)
+	{
+		Token token = { Token::EMPTY, c - src };
+		if(*c >= '0' && *c <= '9')
+		{
+			token.type = Token::NUMBER;
+			char* out;
+			token.number = strtof(c, &out);
+			c = out-1;
+		}
+		else
+		{
+			switch(*c)
+			{
+				case '+': token.type = Token::OPERATOR; token.oper = Token::ADD; break;
+				case '*': token.type = Token::OPERATOR; token.oper = Token::MULTIPLY; break;
+			}
+		}
+		if(token.type != Token::EMPTY)
+		{
+			if(token_count < max_size)
+			{
+				tokens[token_count] = token;
+			}
+			++token_count;
+		}
+		++c;
+	}
+	return token_count;
+}
+
 
 auto c = [](float f, int i) -> uint8
 {
@@ -103,8 +243,10 @@ auto c = [](float f, int i) -> uint8
 	return u.i[i];
 };
 
+
 #define FLOAT_BYTES(f) \
 	Instruction::PUSH_FLOAT, c((f), 0), c((f), 1), c((f), 2), c((f), 3)
+
 
 float floatBinaryOperator(float f1, float f2, Instruction::Type type)
 {
@@ -118,6 +260,43 @@ float floatBinaryOperator(float f1, float f2, Instruction::Type type)
 }
 
 #undef FLOAT_BYTES2
+
+
+TEST_CASE("Tokenize", "Convert string to tokens") {
+	ExpressionVM vm;
+	static const int MAX_TOKENS = 100;
+	Token tokens[MAX_TOKENS];
+	CHECK(vm.tokenize("4 * 2 + 3.0", tokens, MAX_TOKENS) == 5);
+	CHECK(tokens[0].type == Token::NUMBER);
+	CHECK(tokens[1].type == Token::OPERATOR);
+	CHECK(tokens[2].type == Token::NUMBER);
+	CHECK(tokens[3].type == Token::OPERATOR);
+	CHECK(tokens[4].type == Token::NUMBER);
+	CHECK(vm.tokenize("2.5", tokens, MAX_TOKENS) == 1);
+	CHECK(tokens[0].type == Token::NUMBER);
+	CHECK(vm.tokenize("", tokens, MAX_TOKENS) == 0);
+}
+
+
+TEST_CASE("Compile", "Compile source to bytecode") {
+	ExpressionVM vm;
+	const char* src = "4.5 + 10 * 3 + 5.5";
+	static const int MAX_TOKENS = 7;
+	Token tokens[MAX_TOKENS];
+	REQUIRE(vm.tokenize(src, tokens, MAX_TOKENS) == MAX_TOKENS);
+
+	Token postfix_tokens[MAX_TOKENS];
+	vm.toPostfix(tokens, postfix_tokens, MAX_TOKENS);
+
+	static const int BYTE_CODE_SIZE = 150;
+	uint8 byte_code[BYTE_CODE_SIZE];
+
+	int size = vm.compile(src, postfix_tokens, sizeof(postfix_tokens) / sizeof(postfix_tokens[0]), byte_code, BYTE_CODE_SIZE);
+	CHECK(size == 22);
+
+	float x = vm.evaluate(byte_code);
+	CHECK(x == Approx(40.0f));
+}
 
 
 TEST_CASE("Run", "Execute bytecode") {
