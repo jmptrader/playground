@@ -1,8 +1,19 @@
 #define CATCH_CONFIG_MAIN
 #include "catch/catch.hpp"
+#include <cmath>
+
+/*
+
+TODO:
+- compile time errors
+- runtime erros
+
+*/
+
 
 
 typedef unsigned char uint8;
+typedef unsigned int uint16;
 typedef unsigned int uint32;
 
 
@@ -17,14 +28,15 @@ namespace Instruction
 		DIV_FLOAT,
 		RET_FLOAT,
 		SUB_FLOAT,
-		UNARY_MINUS
+		UNARY_MINUS,
+		CALL
 	};
 }
 
 
 struct Token
 {
-	enum Type { EMPTY, NUMBER, OPERATOR, LEFT_PARENTHESIS, RIGHT_PARENTHESIS };
+	enum Type { EMPTY, NUMBER, OPERATOR, IDENTIFIER, LEFT_PARENTHESIS, RIGHT_PARENTHESIS };
 	Type type;
 
 	enum Operator {
@@ -36,6 +48,7 @@ struct Token
 	};
 
 	int offset;
+	int size;
 
 	float number;
 	Operator oper;
@@ -55,8 +68,9 @@ public:
 	int toPostfix(const Token* input, Token* output, int count);
 	float compileAndRun(const char* src);
 
-
 private:
+	void callFunction(uint16 idx);
+
 	template<typename T>
 	T& pop()
 	{
@@ -84,6 +98,7 @@ private:
 
 	static int getOperatorPriority(const Token& token)
 	{
+		if (token.type == Token::IDENTIFIER) return 2;
 		switch(token.oper)
 		{
 			case Token::ADD: return 0;
@@ -112,6 +127,10 @@ float ExpressionVM::evaluate(const uint8* code)
 		++cp;
 		switch(type)
 		{
+			case Instruction::CALL:
+				callFunction(*(uint16*)cp);
+				cp += sizeof(cp);
+				break;
 			case Instruction::RET_FLOAT:
 				return pop<float>();
 			case Instruction::ADD_FLOAT:
@@ -213,6 +232,41 @@ int ExpressionVM::toPostfix(const Token* input, Token* output, int count)
 }
 
 
+void ExpressionVM::callFunction(uint16 idx)
+{
+	switch(idx)
+	{
+		case 0: push<float>(sin(pop<float>())); break;
+		case 1: push<float>(cos(pop<float>())); break;
+		default: DebugBreak(); break;
+	}
+}
+
+
+static const uint16 getFunctionIdx(const char* src, const Token& token)
+{
+	static const char* functs[] = { "sin", "cos" };
+	for(int i = 0; i < sizeof(functs) / sizeof(*functs); ++i)
+	{
+		if(strncmp(src + token.offset, functs[i], token.size) == 0) return i;
+	}
+	return 0xffFF;
+}
+
+
+static float getConstValue(const char* src, const Token& token)
+{
+	static const struct { const char* name; float value; } CONSTS[] =
+	{
+		{ "PI", 3.14159265358979323846f }
+	};
+	for(const auto& i : CONSTS)
+	{
+		if(strncmp(i.name, src + token.offset, token.size) == 0) return i.value;
+	}
+	return 0;
+}
+
 
 int ExpressionVM::compile(const char* src, const Token* tokens, int token_count, uint8* byte_code, int max_size)
 {
@@ -239,6 +293,25 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 					case Token::UNARY_MINUS: *out = Instruction::UNARY_MINUS; ++out; break;
 				}
 				break;
+			case Token::IDENTIFIER:
+				{
+					uint16 func_idx = getFunctionIdx(src, token);
+					if(func_idx != 0xffFF)
+					{
+						*out = Instruction::CALL;
+						++out;
+						*(uint16*)out = getFunctionIdx(src, token);
+						out += sizeof(uint16);
+					}
+					else
+					{
+						*out = Instruction::PUSH_FLOAT;
+						++out;
+						*(float*)out = getConstValue(src, token);
+						out += sizeof(float);
+					}
+				}
+				break;
 			default:
 				DebugBreak();
 				break;
@@ -251,6 +324,12 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 }
 
 
+static bool isIdentifierChar(char c)
+{
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z';
+}
+
+
 int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 {
 	const char* c = src;
@@ -259,7 +338,15 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 	while (*c)
 	{
 		Token token = { Token::EMPTY, c - src };
-		if (*c == '(')
+		if (isIdentifierChar(*c))
+		{
+			token.offset = c - src;
+			++c;
+			token.type = Token::IDENTIFIER;
+			while(isIdentifierChar(*c)) ++c;
+			token.size = (c - src) - token.offset;
+		}
+		else if (*c == '(')
 		{
 			binary = false;
 			token.type = Token::LEFT_PARENTHESIS;
@@ -346,6 +433,14 @@ float floatBinaryOperator(float f1, float f2, Instruction::Type type)
 }
 
 #undef FLOAT_BYTES2
+
+
+TEST_CASE("Function", "Call different functions") {
+	ExpressionVM vm;
+	CHECK(vm.compileAndRun("sin(0)") == Approx(0.0f));
+	CHECK(vm.compileAndRun("cos(0)") == Approx(1.0f));
+	CHECK(vm.compileAndRun("cos(PI)") == Approx(-1.0f));
+}
 
 
 TEST_CASE("Tokenize", "Convert string to tokens") {
