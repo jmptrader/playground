@@ -5,16 +5,26 @@
 /*
 
 TODO:
-- compile time errors
-- runtime erros
-
+- compile time errors - offset in the source
+- runtime errors
+- split compiler, runtime env
+- types other than float
 */
-
-
 
 typedef unsigned char uint8;
 typedef unsigned int uint16;
 typedef unsigned int uint32;
+
+
+enum class CompileTimeError
+{
+	NONE,
+	UNKNOWN_IDENTIFIER,
+	MISSING_LEFT_PARENTHESIS,
+	MISSING_RIGHT_PARENTHESIS,
+	UNEXPECTED_CHAR,
+	OUT_OF_MEMORY
+};
 
 
 namespace Instruction
@@ -67,6 +77,7 @@ public:
 	int compile(const char* src, const Token* tokens, int token_count, uint8* byte_code, int max_size);
 	int toPostfix(const Token* input, Token* output, int count);
 	float compileAndRun(const char* src);
+	CompileTimeError getCompileTimeError() const { return m_compile_time_error; }
 
 private:
 	void callFunction(uint16 idx);
@@ -114,6 +125,7 @@ private:
 private:
 	uint8 m_stack[STACK_SIZE];
 	int m_stack_pointer;
+	CompileTimeError m_compile_time_error;
 };
 
 
@@ -170,8 +182,14 @@ float ExpressionVM::compileAndRun(const char* src)
 	Token tokens[MAX_TOKENS_COUNT];
 	Token postfix_tokens[MAX_TOKENS_COUNT];
 	int tokens_count = tokenize(src, tokens, MAX_TOKENS_COUNT);
+	if(tokens_count <= 0 ) return 0;
+
 	int postfix_tokens_count = toPostfix(tokens, postfix_tokens, tokens_count);
-	compile(src, postfix_tokens, postfix_tokens_count, byte_code, MAX_BYTECODE_SIZE);
+	if(postfix_tokens_count <= 0) return 0;
+
+	int size = compile(src, postfix_tokens, postfix_tokens_count, byte_code, MAX_BYTECODE_SIZE);
+	if(size <=  0) return 0;
+
 	return evaluate(byte_code);
 }
 
@@ -206,7 +224,15 @@ int ExpressionVM::toPostfix(const Token* input, Token* output, int count)
 				++out;
 			}
 
-			if (func_stack_idx > 0) --func_stack_idx;
+			if (func_stack_idx > 0)
+			{
+				--func_stack_idx;
+			}
+			else
+			{
+				m_compile_time_error = CompileTimeError::MISSING_LEFT_PARENTHESIS;
+				return -1;
+			}
 		}
 		else
 		{
@@ -225,6 +251,11 @@ int ExpressionVM::toPostfix(const Token* input, Token* output, int count)
 
 	for(int i = func_stack_idx - 1; i >= 0; --i)
 	{
+		if(func_stack[i].type == Token::LEFT_PARENTHESIS)
+		{
+			m_compile_time_error = CompileTimeError::MISSING_RIGHT_PARENTHESIS;
+			return -1;
+		}
 		*out = func_stack[i];
 		++out;
 	}
@@ -254,7 +285,7 @@ static const uint16 getFunctionIdx(const char* src, const Token& token)
 }
 
 
-static float getConstValue(const char* src, const Token& token)
+static bool getConstValue(const char* src, const Token& token, float& value)
 {
 	static const struct { const char* name; float value; } CONSTS[] =
 	{
@@ -262,9 +293,13 @@ static float getConstValue(const char* src, const Token& token)
 	};
 	for(const auto& i : CONSTS)
 	{
-		if(strncmp(i.name, src + token.offset, token.size) == 0) return i.value;
+		if(strncmp(i.name, src + token.offset, token.size) == 0)
+		{
+			value = i.value;
+			return true;
+		}
 	}
-	return 0;
+	return false;
 }
 
 
@@ -277,7 +312,11 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 		switch(token.type)
 		{
 			case Token::NUMBER:
-				if (max_size - (out - byte_code) < sizeof(float) + 1) return out - byte_code;
+				if (max_size - (out - byte_code) < sizeof(float) + 1)
+				{
+					m_compile_time_error = CompileTimeError::OUT_OF_MEMORY;
+					return -1;
+				}
 				*out = Instruction::PUSH_FLOAT;
 				++out;
 				*(float*)out = token.number;
@@ -291,6 +330,7 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 					case Token::DIVIDE: *out = Instruction::DIV_FLOAT; ++out; break;
 					case Token::SUBTRACT: *out = Instruction::SUB_FLOAT; ++out; break;
 					case Token::UNARY_MINUS: *out = Instruction::UNARY_MINUS; ++out; break;
+					default: DebugBreak(); break;
 				}
 				break;
 			case Token::IDENTIFIER:
@@ -300,14 +340,20 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 					{
 						*out = Instruction::CALL;
 						++out;
-						*(uint16*)out = getFunctionIdx(src, token);
+						*(uint16*)out = func_idx;
 						out += sizeof(uint16);
 					}
 					else
 					{
 						*out = Instruction::PUSH_FLOAT;
 						++out;
-						*(float*)out = getConstValue(src, token);
+						float const_value;
+						if(!getConstValue(src, token, const_value))
+						{
+							m_compile_time_error = CompileTimeError::UNKNOWN_IDENTIFIER;
+							return -1;
+						}
+						*(float*)out = const_value;
 						out += sizeof(float);
 					}
 				}
@@ -317,7 +363,11 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 				break;
 		}
 	}
-	if (max_size - (out - byte_code) < 1) return out - byte_code;
+	if (max_size - (out - byte_code) < 1)
+	{
+		m_compile_time_error = CompileTimeError::OUT_OF_MEMORY;
+		return -1;
+	}
 	*out = Instruction::RET_FLOAT;
 	++out;
 	return out - byte_code;
@@ -326,12 +376,13 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 
 static bool isIdentifierChar(char c)
 {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z';
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_';
 }
 
 
 int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 {
+	m_compile_time_error = CompileTimeError::NONE;
 	const char* c = src;
 	int token_count = 0;
 	bool binary = false;
@@ -345,6 +396,7 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 			token.type = Token::IDENTIFIER;
 			while(isIdentifierChar(*c)) ++c;
 			token.size = (c - src) - token.offset;
+			--c;
 		}
 		else if (*c == '(')
 		{
@@ -369,6 +421,9 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 		{
 			switch(*c)
 			{
+				case ' ':
+				case '\n': break;
+				case '\t': break;
 				case '+':
 					token.type = Token::OPERATOR;
 					token.oper = Token::ADD;
@@ -389,6 +444,9 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 					token.oper = binary ? Token::SUBTRACT : Token::UNARY_MINUS;
 					binary = false;
 					break;
+				default:
+					m_compile_time_error = CompileTimeError::UNEXPECTED_CHAR;
+					return -1;
 			}
 		}
 		if(token.type != Token::EMPTY)
@@ -396,6 +454,11 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 			if(token_count < max_size)
 			{
 				tokens[token_count] = token;
+			}
+			else
+			{
+				m_compile_time_error = CompileTimeError::OUT_OF_MEMORY;
+				return -1;
 			}
 			++token_count;
 		}
@@ -420,7 +483,6 @@ auto c = [](float f, int i) -> uint8
 #define FLOAT_BYTES(f) \
 	Instruction::PUSH_FLOAT, c((f), 0), c((f), 1), c((f), 2), c((f), 3)
 
-
 float floatBinaryOperator(float f1, float f2, Instruction::Type type)
 {
 	ExpressionVM vm;
@@ -435,10 +497,49 @@ float floatBinaryOperator(float f1, float f2, Instruction::Type type)
 #undef FLOAT_BYTES2
 
 
+TEST_CASE("Compile time erros", "Report compile time errors") {
+	ExpressionVM vm;
+	vm.compileAndRun("unknown_function(10)");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::UNKNOWN_IDENTIFIER);
+	vm.compileAndRun("sin(UKNOWN_CONST)");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::UNKNOWN_IDENTIFIER);
+
+	vm.compileAndRun("sin UKNOWN_CONST)");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_LEFT_PARENTHESIS);
+
+	vm.compileAndRun("sin (UKNOWN_CONST))");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_LEFT_PARENTHESIS);
+
+	vm.compileAndRun("sin (UKNOWN_CONST");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_RIGHT_PARENTHESIS);
+
+	vm.compileAndRun("sin ((UKNOWN_CONST)");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_RIGHT_PARENTHESIS);
+
+	vm.compileAndRun("(sin ((UKNOWN_CONST)");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_RIGHT_PARENTHESIS);
+
+	vm.compileAndRun("10 . 5");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::UNEXPECTED_CHAR);
+
+	vm.compileAndRun("10 * 5;");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::UNEXPECTED_CHAR);
+
+	vm.compileAndRun(".sin(0)");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::UNEXPECTED_CHAR);
+
+	vm.compileAndRun("1*1*1*1*1*1*1*1*1*1*1*1*1*1*1*1*1*1*");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::OUT_OF_MEMORY);
+}
+
+
 TEST_CASE("Function", "Call different functions") {
 	ExpressionVM vm;
 	CHECK(vm.compileAndRun("sin(0)") == Approx(0.0f));
+	CHECK(vm.getCompileTimeError() == CompileTimeError::NONE);
 	CHECK(vm.compileAndRun("cos(0)") == Approx(1.0f));
+	CHECK(vm.compileAndRun("cos 0") == Approx(1.0f));
+	CHECK(vm.compileAndRun("cos(10 * 0)") == Approx(1.0f));
 	CHECK(vm.compileAndRun("cos(PI)") == Approx(-1.0f));
 }
 
