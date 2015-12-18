@@ -551,9 +551,6 @@ TEST_CASE("Compile time erros", "Report compile time errors") {
 	vm.compileAndRun("+ 1");
 	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_BINARY_OPERAND);
 
-	vm.compileAndRun("1 *");
-	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_BINARY_OPERAND);
-
 	vm.compileAndRun("1 + (+ 2)");
 	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_BINARY_OPERAND);
 
