@@ -23,7 +23,8 @@ enum class CompileTimeError
 	MISSING_LEFT_PARENTHESIS,
 	MISSING_RIGHT_PARENTHESIS,
 	UNEXPECTED_CHAR,
-	OUT_OF_MEMORY
+	OUT_OF_MEMORY,
+	MISSING_BINARY_OPERAND
 };
 
 
@@ -69,7 +70,6 @@ class ExpressionVM
 {
 public:
 	static const int STACK_SIZE = 50;
-
 
 public:
 	float evaluate(const uint8* code);
@@ -259,6 +259,7 @@ int ExpressionVM::toPostfix(const Token* input, Token* output, int count)
 		*out = func_stack[i];
 		++out;
 	}
+
 	return out_token_count;
 }
 
@@ -425,16 +426,31 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 				case '\n': break;
 				case '\t': break;
 				case '+':
+					if(!binary)
+					{
+						m_compile_time_error = CompileTimeError::MISSING_BINARY_OPERAND;
+						return -1;
+					}
 					token.type = Token::OPERATOR;
 					token.oper = Token::ADD;
 					binary = false;
 					break;
 				case '*':
+					if(!binary)
+					{
+						m_compile_time_error = CompileTimeError::MISSING_BINARY_OPERAND;
+						return -1;
+					}
 					token.type = Token::OPERATOR;
 					token.oper = Token::MULTIPLY;
 					binary = false;
 					break;
 				case '/':
+					if(!binary)
+					{
+						m_compile_time_error = CompileTimeError::MISSING_BINARY_OPERAND;
+						return -1;
+					}
 					token.type = Token::OPERATOR;
 					token.oper = Token::DIVIDE;
 					binary = false;
@@ -501,6 +517,7 @@ TEST_CASE("Compile time erros", "Report compile time errors") {
 	ExpressionVM vm;
 	vm.compileAndRun("unknown_function(10)");
 	CHECK(vm.getCompileTimeError() == CompileTimeError::UNKNOWN_IDENTIFIER);
+
 	vm.compileAndRun("sin(UKNOWN_CONST)");
 	CHECK(vm.getCompileTimeError() == CompileTimeError::UNKNOWN_IDENTIFIER);
 
@@ -527,6 +544,24 @@ TEST_CASE("Compile time erros", "Report compile time errors") {
 
 	vm.compileAndRun(".sin(0)");
 	CHECK(vm.getCompileTimeError() == CompileTimeError::UNEXPECTED_CHAR);
+
+	vm.compileAndRun("* 1");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_BINARY_OPERAND);
+
+	vm.compileAndRun("+ 1");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_BINARY_OPERAND);
+
+	vm.compileAndRun("1 *");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_BINARY_OPERAND);
+
+	vm.compileAndRun("1 + (+ 2)");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_BINARY_OPERAND);
+
+	vm.compileAndRun("1 / *");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_BINARY_OPERAND);
+
+	vm.compileAndRun("/ 1 *");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_BINARY_OPERAND);
 
 	vm.compileAndRun("1*1*1*1*1*1*1*1*1*1*1*1*1*1*1*1*1*1*");
 	CHECK(vm.getCompileTimeError() == CompileTimeError::OUT_OF_MEMORY);
