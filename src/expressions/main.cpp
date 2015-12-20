@@ -3,11 +3,9 @@
 #include <cmath>
 
 /*
-
 TODO:
-- runtime errors
+- logical operators - and, or
 - split compiler, runtime env
-- types other than float
 */
 
 typedef unsigned char uint8;
@@ -40,7 +38,7 @@ enum class CompileTimeError
 
 namespace Instruction
 {
-	enum Type
+	enum Type : uint8
 	{
 		PUSH_FLOAT,
 		POP_FLOAT,
