@@ -51,7 +51,9 @@ namespace Instruction
 		UNARY_MINUS,
 		CALL,
 		FLOAT_LT,
-		FLOAT_GT
+		FLOAT_GT,
+		AND,
+		OR
 	};
 }
 
@@ -68,7 +70,9 @@ struct Token
 		SUBTRACT,
 		UNARY_MINUS,
 		LESS_THAN,
-		GREATER_THAN
+		GREATER_THAN,
+		AND,
+		OR
 	};
 
 	int offset;
@@ -154,13 +158,15 @@ private:
 		if (token.type != Token::OPERATOR) DebugBreak();
 		switch (token.oper)
 		{
-			case Token::LESS_THAN: return 0;
-			case Token::GREATER_THAN: return 0;
-			case Token::ADD: return 1;
-			case Token::SUBTRACT: return 1;
-			case Token::MULTIPLY: return 2;
-			case Token::DIVIDE: return 2;
-			case Token::UNARY_MINUS: return 2;
+			case Token::OR: return 0;
+			case Token::AND: return 1;
+			case Token::LESS_THAN: return 2;
+			case Token::GREATER_THAN: return 2;
+			case Token::ADD: return 3;
+			case Token::SUBTRACT: return 3;
+			case Token::MULTIPLY: return 4;
+			case Token::DIVIDE: return 4;
+			case Token::UNARY_MINUS: return 4;
 		}
 		return -1;
 	}
@@ -178,50 +184,46 @@ ExpressionVM::ReturnValue ExpressionVM::evaluate(const uint8* code)
 {
 	m_stack_pointer = 0;
 	const uint8* cp = code;
-	for(;;)
+	for (;;)
 	{
 		uint8 type = *cp;
 		++cp;
-		switch(type)
+		switch (type)
 		{
 			case Instruction::CALL:
 				callFunction(*(uint16*)cp);
 				cp += sizeof(cp);
 				break;
-			case Instruction::RET_FLOAT:
-				return pop<float>();
-			case Instruction::RET_BOOL:
-				return pop<bool>();
-			case Instruction::ADD_FLOAT:
-				push<float>(pop<float>() + pop<float>());
-				break;
-			case Instruction::SUB_FLOAT:
-				push<float>(-pop<float>() + pop<float>());
-				break;
-			case Instruction::PUSH_FLOAT:
-				cp = pushStackConst<float>(cp);
-				break;
-			case Instruction::FLOAT_LT:
-				push<bool>(pop<float>() > pop<float>());
-				break;
-			case Instruction::FLOAT_GT:
-				push<bool>(pop<float>() < pop<float>());
-				break;
-			case Instruction::MUL_FLOAT:
-				push<float>(pop<float>() * pop<float>());
-				break;
+			case Instruction::RET_FLOAT: return pop<float>();
+			case Instruction::RET_BOOL: return pop<bool>();
+			case Instruction::ADD_FLOAT: push<float>(pop<float>() + pop<float>()); break;
+			case Instruction::SUB_FLOAT: push<float>(-pop<float>() + pop<float>()); break;
+			case Instruction::PUSH_FLOAT: cp = pushStackConst<float>(cp); break;
+			case Instruction::FLOAT_LT: push<bool>(pop<float>() > pop<float>()); break;
+			case Instruction::FLOAT_GT: push<bool>(pop<float>() < pop<float>()); break;
+			case Instruction::MUL_FLOAT: push<float>(pop<float>() * pop<float>()); break;
 			case Instruction::DIV_FLOAT:
-				{
-					float f = pop<float>();
-					push<float>(pop<float>() / f);
-				}
-				break;
-			case Instruction::UNARY_MINUS:
-				push<float>(-pop<float>());
-				break;
-			default:
-				DebugBreak();
-				break;
+			{
+				float f = pop<float>();
+				push<float>(pop<float>() / f);
+			}
+			break;
+			case Instruction::UNARY_MINUS: push<float>(-pop<float>()); break;
+			case Instruction::OR:
+			{
+				bool b1 = pop<bool>();
+				bool b2 = pop<bool>();
+				push<bool>(b1 || b2);
+			}
+			break;
+			case Instruction::AND:
+			{
+				bool b1 = pop<bool>();
+				bool b2 = pop<bool>();
+				push<bool>(b1 && b2);
+			}
+			break;
+			default: DebugBreak(); break;
 		}
 	}
 }
@@ -408,7 +410,15 @@ static const struct
 	{Token::GREATER_THAN,
 		Types::BOOL,
 		Instruction::FLOAT_GT,
-		{Types::FLOAT, Types::FLOAT, Types::NONE}}
+		{Types::FLOAT, Types::FLOAT, Types::NONE}},
+	{Token::AND,
+		Types::BOOL,
+		Instruction::AND,
+		{ Types::BOOL, Types::BOOL, Types::NONE }},
+	{Token::OR,
+		Types::BOOL,
+		Instruction::OR,
+		{ Types::BOOL, Types::BOOL, Types::NONE }}
 };
 
 
@@ -534,13 +544,15 @@ static bool isIdentifierChar(char c)
 }
 
 
-static const struct { char c; bool binary; Token::Operator op; } OPERATORS[] =
+static const struct { const char* c; bool binary; Token::Operator op; } OPERATORS[] =
 {
-	{ '*', true, Token::MULTIPLY },
-	{ '+', true, Token::ADD },
-	{ '/', true, Token::DIVIDE },
-	{ '<', true, Token::LESS_THAN },
-	{ '>', true, Token::GREATER_THAN }
+	{ "*", true, Token::MULTIPLY },
+	{ "+", true, Token::ADD },
+	{ "/", true, Token::DIVIDE },
+	{ "<", true, Token::LESS_THAN },
+	{ ">", true, Token::GREATER_THAN },
+	{ "and", true, Token::AND },
+	{ "or", true, Token::OR }
 };
 
 
@@ -553,70 +565,73 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 	while (*c)
 	{
 		Token token = { Token::EMPTY, c - src };
-		if (isIdentifierChar(*c))
+		
+		for (auto& i : OPERATORS)
 		{
-			token.offset = c - src;
-			++c;
-			token.type = Token::IDENTIFIER;
-			while(isIdentifierChar(*c)) ++c;
-			token.size = (c - src) - token.offset;
-			--c;
-		}
-		else if (*c == '(')
-		{
-			binary = false;
-			token.type = Token::LEFT_PARENTHESIS;
-		}
-		else if (*c == ')')
-		{
-			binary = false;
-			token.type = Token::RIGHT_PARENTHESIS;
-			binary = true;
-		}
-		else if (*c >= '0' && *c <= '9')
-		{
-			token.type = Token::NUMBER;
-			char* out;
-			token.number = strtof(c, &out);
-			c = out-1;
-			binary = true;
-		}
-		else
-		{
-			for (auto& i : OPERATORS)
+			if (strncmp(c, i.c, strlen(i.c) != 0)) continue;
+			if (i.binary && !binary)
 			{
-				if (*c != i.c) continue;
+				m_compile_time_error = CompileTimeError::MISSING_BINARY_OPERAND;
+				m_compile_time_offset = token.offset;
+				return -1;
+			}
 
-				if (i.binary && !binary)
-				{
-					m_compile_time_error = CompileTimeError::MISSING_BINARY_OPERAND;
-					m_compile_time_offset = token.offset;
-					return -1;
-				}
+			token.type = Token::OPERATOR;
+			token.oper = i.op;
+			binary = false;
+			c += strlen(i.c) - 1;
+			break;
+		}
 
+		if (token.type == Token::EMPTY)
+		{
+			switch (*c)
+			{
+			case ' ':
+			case '\n':
+			case '\t': ++c; continue;
+			case '-':
 				token.type = Token::OPERATOR;
-				token.oper = i.op;
+				token.oper = binary ? Token::SUBTRACT : Token::UNARY_MINUS;
 				binary = false;
 				break;
 			}
+		}
 
-			if (token.type == Token::EMPTY)
+		if (token.type == Token::EMPTY)
+		{
+			if (isIdentifierChar(*c))
 			{
-				switch (*c)
-				{
-				case ' ':
-				case '\n':
-				case '\t': break;
-				case '-':
-					token.type = Token::OPERATOR;
-					token.oper = binary ? Token::SUBTRACT : Token::UNARY_MINUS;
-					binary = false;
-					break;
-				default:
-					m_compile_time_error = CompileTimeError::UNEXPECTED_CHAR;
-					m_compile_time_offset = token.offset;
-					return -1;
-				}
+				token.offset = c - src;
+				++c;
+				token.type = Token::IDENTIFIER;
+				while (isIdentifierChar(*c)) ++c;
+				token.size = (c - src) - token.offset;
+				--c;
+			}
+			else if (*c == '(')
+			{
+				binary = false;
+				token.type = Token::LEFT_PARENTHESIS;
+			}
+			else if (*c == ')')
+			{
+				binary = false;
+				token.type = Token::RIGHT_PARENTHESIS;
+				binary = true;
+			}
+			else if (*c >= '0' && *c <= '9')
+			{
+				token.type = Token::NUMBER;
+				char* out;
+				token.number = strtof(c, &out);
+				c = out - 1;
+				binary = true;
+			}
+			else
+			{
+				m_compile_time_error = CompileTimeError::UNEXPECTED_CHAR;
+				m_compile_time_offset = token.offset;
 			}
 		}
 		if(token.type != Token::EMPTY)
@@ -785,19 +800,41 @@ TEST_CASE("Compile", "Compile source to bytecode") {
 
 TEST_CASE("Booleans", "Various operations returning booleans") {
 	ExpressionVM vm;
-	CHECK(vm.compileAndRun("1 < 2").b_value);
-	CHECK(vm.compileAndRun("1 < (2)").b_value);
-	CHECK(vm.compileAndRun("(1) < (2)").b_value);
-	CHECK(vm.compileAndRun("(1 < 2)").b_value);
-	CHECK(vm.compileAndRun("1 < 2").b_value);
-	CHECK(!vm.compileAndRun("1 > 2").b_value);
-	CHECK(vm.compileAndRun("2 > 1").b_value);
-	CHECK(vm.compileAndRun("2 + 3 > 4").b_value);
-	CHECK(vm.compileAndRun("4 - 1.1 < 3").b_value);
-	CHECK(vm.compileAndRun("4 - 1.1 < 1.5 * 2").b_value);
-	CHECK(vm.compileAndRun("-2 < -1").b_value);
-	CHECK(!vm.compileAndRun("-2 < -2").b_value);
-	CHECK(!vm.compileAndRun("-2 > -2").b_value);
+
+	SECTION("Comparision") {
+		CHECK(vm.compileAndRun("1 < 2").b_value);
+		CHECK(vm.compileAndRun("1 < (2)").b_value);
+		CHECK(vm.compileAndRun("(1) < (2)").b_value);
+		CHECK(vm.compileAndRun("(1 < 2)").b_value);
+		CHECK(vm.compileAndRun("1 < 2").b_value);
+		CHECK(!vm.compileAndRun("1 > 2").b_value);
+		CHECK(vm.compileAndRun("2 > 1").b_value);
+		CHECK(vm.compileAndRun("2 + 3 > 4").b_value);
+		CHECK(vm.compileAndRun("4 - 1.1 < 3").b_value);
+		CHECK(vm.compileAndRun("4 - 1.1 < 1.5 * 2").b_value);
+		CHECK(vm.compileAndRun("-2 < -1").b_value);
+		CHECK(!vm.compileAndRun("-2 < -2").b_value);
+		CHECK(!vm.compileAndRun("-2 > -2").b_value);
+	}
+
+	SECTION("Simple comparision") {
+		CHECK(vm.compileAndRun("-2 < -1 and 2 > 1").b_value);
+		CHECK(vm.compileAndRun("-2 < -1 or 2 < 1").b_value);
+		CHECK(vm.compileAndRun("-2 > -1 or 2 > 1").b_value);
+		CHECK(!vm.compileAndRun("-2 > -1 or 2 < 1").b_value);
+	}
+
+	SECTION("And/Or priority") {
+		CHECK(vm.compileAndRun("1 < 2 and 2 < 1 or 1 < 2").b_value);
+		CHECK(vm.compileAndRun("(2 < 1 or 1 < 2) and 1 < 2").b_value);
+		CHECK(vm.compileAndRun("1 < 2 and (2 < 1 or 1 < 2)").b_value);
+		CHECK(!vm.compileAndRun("1 < 2 and 2 < 1 or 1 > 2").b_value);
+
+		CHECK(vm.compileAndRun("1 < 2 or 2 < 1 and 1 < 2").b_value);
+		CHECK(!vm.compileAndRun("1 > 2 or 2 < 1 and 1 < 2").b_value);
+
+		CHECK(!vm.compileAndRun("1 > 2 or 2 < 1 and 1 < 2").b_value);
+	}
 }
 
 
