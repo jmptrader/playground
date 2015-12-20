@@ -5,7 +5,6 @@
 /*
 
 TODO:
-- compile time errors - offset in the source
 - runtime errors
 - split compiler, runtime env
 - types other than float
@@ -126,6 +125,7 @@ private:
 	uint8 m_stack[STACK_SIZE];
 	int m_stack_pointer;
 	CompileTimeError m_compile_time_error;
+	int m_compile_time_offset;
 };
 
 
@@ -231,6 +231,7 @@ int ExpressionVM::toPostfix(const Token* input, Token* output, int count)
 			else
 			{
 				m_compile_time_error = CompileTimeError::MISSING_LEFT_PARENTHESIS;
+				m_compile_time_offset = token.offset;
 				return -1;
 			}
 		}
@@ -254,6 +255,7 @@ int ExpressionVM::toPostfix(const Token* input, Token* output, int count)
 		if(func_stack[i].type == Token::LEFT_PARENTHESIS)
 		{
 			m_compile_time_error = CompileTimeError::MISSING_RIGHT_PARENTHESIS;
+			m_compile_time_offset = func_stack[i].offset;
 			return -1;
 		}
 		*out = func_stack[i];
@@ -352,6 +354,7 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 						if(!getConstValue(src, token, const_value))
 						{
 							m_compile_time_error = CompileTimeError::UNKNOWN_IDENTIFIER;
+							m_compile_time_offset = token.offset;
 							return -1;
 						}
 						*(float*)out = const_value;
@@ -429,6 +432,7 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 					if(!binary)
 					{
 						m_compile_time_error = CompileTimeError::MISSING_BINARY_OPERAND;
+						m_compile_time_offset = token.offset;
 						return -1;
 					}
 					token.type = Token::OPERATOR;
@@ -439,6 +443,7 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 					if(!binary)
 					{
 						m_compile_time_error = CompileTimeError::MISSING_BINARY_OPERAND;
+						m_compile_time_offset = token.offset;
 						return -1;
 					}
 					token.type = Token::OPERATOR;
@@ -449,6 +454,7 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 					if(!binary)
 					{
 						m_compile_time_error = CompileTimeError::MISSING_BINARY_OPERAND;
+						m_compile_time_offset = token.offset;
 						return -1;
 					}
 					token.type = Token::OPERATOR;
@@ -462,6 +468,7 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 					break;
 				default:
 					m_compile_time_error = CompileTimeError::UNEXPECTED_CHAR;
+					m_compile_time_offset = token.offset;
 					return -1;
 			}
 		}
