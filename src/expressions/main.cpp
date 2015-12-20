@@ -15,6 +15,15 @@ typedef unsigned int uint16;
 typedef unsigned int uint32;
 
 
+enum class Types : uint8
+{
+	FLOAT,
+	BOOL,
+
+	NONE
+};
+
+
 enum class CompileTimeError
 {
 	NONE,
@@ -23,7 +32,9 @@ enum class CompileTimeError
 	MISSING_RIGHT_PARENTHESIS,
 	UNEXPECTED_CHAR,
 	OUT_OF_MEMORY,
-	MISSING_BINARY_OPERAND
+	MISSING_BINARY_OPERAND,
+	NOT_ENOUGH_PARAMETERS,
+	INCORRECT_TYPE_ARGS
 };
 
 
@@ -37,9 +48,12 @@ namespace Instruction
 		MUL_FLOAT,
 		DIV_FLOAT,
 		RET_FLOAT,
+		RET_BOOL,
 		SUB_FLOAT,
 		UNARY_MINUS,
-		CALL
+		CALL,
+		FLOAT_LT,
+		FLOAT_GT
 	};
 }
 
@@ -54,7 +68,9 @@ struct Token
 		MULTIPLY,
 		DIVIDE,
 		SUBTRACT,
-		UNARY_MINUS
+		UNARY_MINUS,
+		LESS_THAN,
+		GREATER_THAN
 	};
 
 	int offset;
@@ -70,12 +86,39 @@ class ExpressionVM
 public:
 	static const int STACK_SIZE = 50;
 
+	struct ReturnValue
+	{
+		ReturnValue()
+		{
+			type = Types::NONE;
+		}
+
+		ReturnValue(float f) 
+		{
+			f_value = f;
+			type = Types::FLOAT;
+		}
+
+		ReturnValue(bool b)
+		{
+			b_value = b;
+			type = Types::BOOL;
+		}
+
+		Types type;
+		union
+		{
+			float f_value;
+			bool b_value;
+		};
+	};
+
 public:
-	float evaluate(const uint8* code);
+	ReturnValue evaluate(const uint8* code);
 	int tokenize(const char* src, Token* tokens, int max_size);
 	int compile(const char* src, const Token* tokens, int token_count, uint8* byte_code, int max_size);
 	int toPostfix(const Token* input, Token* output, int count);
-	float compileAndRun(const char* src);
+	ReturnValue compileAndRun(const char* src);
 	CompileTimeError getCompileTimeError() const { return m_compile_time_error; }
 
 private:
@@ -108,14 +151,18 @@ private:
 
 	static int getOperatorPriority(const Token& token)
 	{
-		if (token.type == Token::IDENTIFIER) return 2;
-		switch(token.oper)
+		if (token.type == Token::IDENTIFIER) return 3;
+		if (token.type == Token::LEFT_PARENTHESIS) return -1;
+		if (token.type != Token::OPERATOR) DebugBreak();
+		switch (token.oper)
 		{
-			case Token::ADD: return 0;
-			case Token::SUBTRACT: return 0;
-			case Token::MULTIPLY: return 1;
-			case Token::DIVIDE: return 1;
-			case Token::UNARY_MINUS: return 1;
+			case Token::LESS_THAN: return 0;
+			case Token::GREATER_THAN: return 0;
+			case Token::ADD: return 1;
+			case Token::SUBTRACT: return 1;
+			case Token::MULTIPLY: return 2;
+			case Token::DIVIDE: return 2;
+			case Token::UNARY_MINUS: return 2;
 		}
 		return -1;
 	}
@@ -129,7 +176,7 @@ private:
 };
 
 
-float ExpressionVM::evaluate(const uint8* code)
+ExpressionVM::ReturnValue ExpressionVM::evaluate(const uint8* code)
 {
 	m_stack_pointer = 0;
 	const uint8* cp = code;
@@ -145,6 +192,8 @@ float ExpressionVM::evaluate(const uint8* code)
 				break;
 			case Instruction::RET_FLOAT:
 				return pop<float>();
+			case Instruction::RET_BOOL:
+				return pop<bool>();
 			case Instruction::ADD_FLOAT:
 				push<float>(pop<float>() + pop<float>());
 				break;
@@ -153,6 +202,12 @@ float ExpressionVM::evaluate(const uint8* code)
 				break;
 			case Instruction::PUSH_FLOAT:
 				cp = pushStackConst<float>(cp);
+				break;
+			case Instruction::FLOAT_LT:
+				push<bool>(pop<float>() > pop<float>());
+				break;
+			case Instruction::FLOAT_GT:
+				push<bool>(pop<float>() < pop<float>());
 				break;
 			case Instruction::MUL_FLOAT:
 				push<float>(pop<float>() * pop<float>());
@@ -174,7 +229,7 @@ float ExpressionVM::evaluate(const uint8* code)
 }
 
 
-float ExpressionVM::compileAndRun(const char* src)
+ExpressionVM::ReturnValue ExpressionVM::compileAndRun(const char* src)
 {
 	static const int MAX_TOKENS_COUNT = 50;
 	static const int MAX_BYTECODE_SIZE = 50;
@@ -182,13 +237,13 @@ float ExpressionVM::compileAndRun(const char* src)
 	Token tokens[MAX_TOKENS_COUNT];
 	Token postfix_tokens[MAX_TOKENS_COUNT];
 	int tokens_count = tokenize(src, tokens, MAX_TOKENS_COUNT);
-	if(tokens_count <= 0 ) return 0;
+	if (tokens_count <= 0) return ReturnValue();
 
 	int postfix_tokens_count = toPostfix(tokens, postfix_tokens, tokens_count);
-	if(postfix_tokens_count <= 0) return 0;
+	if (postfix_tokens_count <= 0) return ReturnValue();
 
 	int size = compile(src, postfix_tokens, postfix_tokens_count, byte_code, MAX_BYTECODE_SIZE);
-	if(size <=  0) return 0;
+	if (size <= 0) return ReturnValue();
 
 	return evaluate(byte_code);
 }
@@ -306,12 +361,72 @@ static bool getConstValue(const char* src, const Token& token, float& value)
 }
 
 
-int ExpressionVM::compile(const char* src, const Token* tokens, int token_count, uint8* byte_code, int max_size)
+static const struct
 {
+	Token::Operator op;
+	Types ret_type;
+	Instruction::Type instr;
+	Types args[9];
+	
+	int arity() const
+	{
+		for (int i = 0; i < sizeof(args) / sizeof(args[0]); ++i)
+		{
+			if (args[i] == Types::NONE) return i;
+		}
+		return 0;
+	}
+
+	bool checkArgTypes(const Types* stack, int idx) const
+	{
+		for (int i = 0; i < arity(); ++i)
+		{
+			if (args[i] != stack[idx - i - 1]) return false;
+		}
+		return true;
+	}
+} OPERATOR_FUNCTIONS[] = {
+	{Token::ADD, Types::FLOAT, Instruction::ADD_FLOAT, {Types::FLOAT, Types::FLOAT, Types::NONE}},
+	{Token::MULTIPLY,
+		Types::FLOAT,
+		Instruction::MUL_FLOAT,
+		{Types::FLOAT, Types::FLOAT, Types::NONE}},
+	{Token::DIVIDE,
+		Types::FLOAT,
+		Instruction::DIV_FLOAT,
+		{Types::FLOAT, Types::FLOAT, Types::NONE}},
+	{Token::SUBTRACT,
+		Types::FLOAT,
+		Instruction::SUB_FLOAT,
+		{Types::FLOAT, Types::FLOAT, Types::NONE}},
+	{Token::UNARY_MINUS,
+		Types::FLOAT,
+		Instruction::UNARY_MINUS,
+		{Types::FLOAT, Types::NONE}},
+	{Token::LESS_THAN,
+		Types::BOOL,
+		Instruction::FLOAT_LT,
+		{Types::FLOAT, Types::FLOAT, Types::NONE}},
+	{Token::GREATER_THAN,
+		Types::BOOL,
+		Instruction::FLOAT_GT,
+		{Types::FLOAT, Types::FLOAT, Types::NONE}}
+};
+
+
+int ExpressionVM::compile(const char* src,
+	const Token* tokens,
+	int token_count,
+	uint8* byte_code,
+	int max_size)
+{
+	Types type_stack[50];
+	int type_stack_idx = 0;
 	uint8* out = byte_code;
-	for(int i = 0; i < token_count; ++i)
+	for (int i = 0; i < token_count; ++i)
 	{
 		auto& token = tokens[i];
+
 		switch(token.type)
 		{
 			case Token::NUMBER:
@@ -321,19 +436,35 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 					return -1;
 				}
 				*out = Instruction::PUSH_FLOAT;
+				type_stack[type_stack_idx] = Types::FLOAT;
+				++type_stack_idx;
 				++out;
 				*(float*)out = token.number;
 				out += sizeof(float);
 				break;
 			case Token::OPERATOR:
-				switch(token.oper)
+				for (auto& fn : OPERATOR_FUNCTIONS)
 				{
-					case Token::ADD: *out = Instruction::ADD_FLOAT; ++out; break;
-					case Token::MULTIPLY: *out = Instruction::MUL_FLOAT; ++out; break;
-					case Token::DIVIDE: *out = Instruction::DIV_FLOAT; ++out; break;
-					case Token::SUBTRACT: *out = Instruction::SUB_FLOAT; ++out; break;
-					case Token::UNARY_MINUS: *out = Instruction::UNARY_MINUS; ++out; break;
-					default: DebugBreak(); break;
+					if (token.oper != fn.op) continue;
+
+					if (type_stack_idx < fn.arity())
+					{
+						m_compile_time_error = CompileTimeError::NOT_ENOUGH_PARAMETERS;
+						m_compile_time_offset = token.offset;
+						return -1;
+					}
+					if (!fn.checkArgTypes(type_stack, type_stack_idx))
+					{
+						m_compile_time_error = CompileTimeError::INCORRECT_TYPE_ARGS;
+						m_compile_time_offset = token.offset;
+						return -1;
+					}
+					type_stack_idx -= fn.arity();
+					type_stack[type_stack_idx] = fn.ret_type;
+					++type_stack_idx;
+					*out = fn.instr;
+					++out;
+					break;
 				}
 				break;
 			case Token::IDENTIFIER:
@@ -341,6 +472,20 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 					uint16 func_idx = getFunctionIdx(src, token);
 					if(func_idx != 0xffFF)
 					{
+						if (type_stack_idx < 1)
+						{
+							m_compile_time_error = CompileTimeError::NOT_ENOUGH_PARAMETERS;
+							m_compile_time_offset = token.offset;
+							return -1;
+						}
+
+						if (type_stack[type_stack_idx - 1] != Types::FLOAT)
+						{
+							m_compile_time_error = CompileTimeError::INCORRECT_TYPE_ARGS;
+							m_compile_time_offset = token.offset;
+							return -1;
+						}
+
 						*out = Instruction::CALL;
 						++out;
 						*(uint16*)out = func_idx;
@@ -349,6 +494,8 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 					else
 					{
 						*out = Instruction::PUSH_FLOAT;
+						type_stack[type_stack_idx] = Types::FLOAT;
+						++type_stack_idx;
 						++out;
 						float const_value;
 						if(!getConstValue(src, token, const_value))
@@ -372,7 +519,12 @@ int ExpressionVM::compile(const char* src, const Token* tokens, int token_count,
 		m_compile_time_error = CompileTimeError::OUT_OF_MEMORY;
 		return -1;
 	}
-	*out = Instruction::RET_FLOAT;
+	switch(type_stack[type_stack_idx - 1])
+	{
+		case Types::FLOAT: *out = Instruction::RET_FLOAT; break;
+		case Types::BOOL: *out = Instruction::RET_BOOL; break;
+		default: DebugBreak(); break;
+	}
 	++out;
 	return out - byte_code;
 }
@@ -382,6 +534,16 @@ static bool isIdentifierChar(char c)
 {
 	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c == '_';
 }
+
+
+static const struct { char c; bool binary; Token::Operator op; } OPERATORS[] =
+{
+	{ '*', true, Token::MULTIPLY },
+	{ '+', true, Token::ADD },
+	{ '/', true, Token::DIVIDE },
+	{ '<', true, Token::LESS_THAN },
+	{ '>', true, Token::GREATER_THAN }
+};
 
 
 int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
@@ -423,44 +585,30 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 		}
 		else
 		{
-			switch(*c)
+			for (auto& i : OPERATORS)
 			{
+				if (*c != i.c) continue;
+
+				if (i.binary && !binary)
+				{
+					m_compile_time_error = CompileTimeError::MISSING_BINARY_OPERAND;
+					m_compile_time_offset = token.offset;
+					return -1;
+				}
+
+				token.type = Token::OPERATOR;
+				token.oper = i.op;
+				binary = false;
+				break;
+			}
+
+			if (token.type == Token::EMPTY)
+			{
+				switch (*c)
+				{
 				case ' ':
-				case '\n': break;
+				case '\n':
 				case '\t': break;
-				case '+':
-					if(!binary)
-					{
-						m_compile_time_error = CompileTimeError::MISSING_BINARY_OPERAND;
-						m_compile_time_offset = token.offset;
-						return -1;
-					}
-					token.type = Token::OPERATOR;
-					token.oper = Token::ADD;
-					binary = false;
-					break;
-				case '*':
-					if(!binary)
-					{
-						m_compile_time_error = CompileTimeError::MISSING_BINARY_OPERAND;
-						m_compile_time_offset = token.offset;
-						return -1;
-					}
-					token.type = Token::OPERATOR;
-					token.oper = Token::MULTIPLY;
-					binary = false;
-					break;
-				case '/':
-					if(!binary)
-					{
-						m_compile_time_error = CompileTimeError::MISSING_BINARY_OPERAND;
-						m_compile_time_offset = token.offset;
-						return -1;
-					}
-					token.type = Token::OPERATOR;
-					token.oper = Token::DIVIDE;
-					binary = false;
-					break;
 				case '-':
 					token.type = Token::OPERATOR;
 					token.oper = binary ? Token::SUBTRACT : Token::UNARY_MINUS;
@@ -470,6 +618,7 @@ int ExpressionVM::tokenize(const char* src, Token* tokens, int max_size)
 					m_compile_time_error = CompileTimeError::UNEXPECTED_CHAR;
 					m_compile_time_offset = token.offset;
 					return -1;
+				}
 			}
 		}
 		if(token.type != Token::EMPTY)
@@ -506,7 +655,7 @@ auto c = [](float f, int i) -> uint8
 #define FLOAT_BYTES(f) \
 	Instruction::PUSH_FLOAT, c((f), 0), c((f), 1), c((f), 2), c((f), 3)
 
-float floatBinaryOperator(float f1, float f2, Instruction::Type type)
+ExpressionVM::ReturnValue floatBinaryOperator(float f1, float f2, Instruction::Type type)
 {
 	ExpressionVM vm;
 	uint8 code[] = {
@@ -555,6 +704,18 @@ TEST_CASE("Compile time erros", "Report compile time errors") {
 	vm.compileAndRun("* 1");
 	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_BINARY_OPERAND);
 
+	vm.compileAndRun("sin");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::NOT_ENOUGH_PARAMETERS);
+
+	vm.compileAndRun("sin()");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::NOT_ENOUGH_PARAMETERS);
+
+	vm.compileAndRun("sin(1 < 5)");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::INCORRECT_TYPE_ARGS);
+
+	vm.compileAndRun("1 + ");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::NOT_ENOUGH_PARAMETERS);
+
 	vm.compileAndRun("+ 1");
 	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_BINARY_OPERAND);
 
@@ -566,6 +727,9 @@ TEST_CASE("Compile time erros", "Report compile time errors") {
 
 	vm.compileAndRun("/ 1 *");
 	CHECK(vm.getCompileTimeError() == CompileTimeError::MISSING_BINARY_OPERAND);
+	
+	vm.compileAndRun("2 > 1 > 0");
+	CHECK(vm.getCompileTimeError() == CompileTimeError::INCORRECT_TYPE_ARGS);
 
 	vm.compileAndRun("1*1*1*1*1*1*1*1*1*1*1*1*1*1*1*1*1*1*");
 	CHECK(vm.getCompileTimeError() == CompileTimeError::OUT_OF_MEMORY);
@@ -574,12 +738,13 @@ TEST_CASE("Compile time erros", "Report compile time errors") {
 
 TEST_CASE("Function", "Call different functions") {
 	ExpressionVM vm;
-	CHECK(vm.compileAndRun("sin(0)") == Approx(0.0f));
+	CHECK(vm.compileAndRun("sin(0)").f_value == Approx(0.0f));
+	CHECK(vm.compileAndRun("sin 0").f_value == Approx(0.0f));
 	CHECK(vm.getCompileTimeError() == CompileTimeError::NONE);
-	CHECK(vm.compileAndRun("cos(0)") == Approx(1.0f));
-	CHECK(vm.compileAndRun("cos 0") == Approx(1.0f));
-	CHECK(vm.compileAndRun("cos(10 * 0)") == Approx(1.0f));
-	CHECK(vm.compileAndRun("cos(PI)") == Approx(-1.0f));
+	CHECK(vm.compileAndRun("cos(0)").f_value == Approx(1.0f));
+	CHECK(vm.compileAndRun("cos 0").f_value == Approx(1.0f));
+	CHECK(vm.compileAndRun("cos(10 * 0)").f_value == Approx(1.0f));
+	CHECK(vm.compileAndRun("cos(PI)").f_value == Approx(-1.0f));
 }
 
 
@@ -615,58 +780,75 @@ TEST_CASE("Compile", "Compile source to bytecode") {
 	int size = vm.compile(src, postfix_tokens, postfix_tokens_count, byte_code, BYTE_CODE_SIZE);
 	CHECK(size == 24);
 
-	float x = vm.evaluate(byte_code);
+	float x = vm.evaluate(byte_code).f_value;
 	CHECK(x == Approx(40.0f));
+}
+
+
+TEST_CASE("Booleans", "Various operations returning booleans") {
+	ExpressionVM vm;
+	CHECK(vm.compileAndRun("1 < 2").b_value);
+	CHECK(vm.compileAndRun("1 < (2)").b_value);
+	CHECK(vm.compileAndRun("(1) < (2)").b_value);
+	CHECK(vm.compileAndRun("(1 < 2)").b_value);
+	CHECK(vm.compileAndRun("1 < 2").b_value);
+	CHECK(!vm.compileAndRun("1 > 2").b_value);
+	CHECK(vm.compileAndRun("2 > 1").b_value);
+	CHECK(vm.compileAndRun("2 + 3 > 4").b_value);
+	CHECK(vm.compileAndRun("4 - 1.1 < 3").b_value);
+	CHECK(vm.compileAndRun("4 - 1.1 < 1.5 * 2").b_value);
+	CHECK(vm.compileAndRun("-2 < -1").b_value);
+	CHECK(!vm.compileAndRun("-2 < -2").b_value);
+	CHECK(!vm.compileAndRun("-2 > -2").b_value);
 }
 
 
 TEST_CASE("Compile & Run", "Compile source to bytecode and run it") {
 	ExpressionVM vm;
 	SECTION("Multiplication & addition") {
-		CHECK(vm.compileAndRun("4.5 + 10 * 3 + 5.5") == Approx(40.0f));
-		CHECK(vm.compileAndRun("(4.5 + 10) * 3 + 5.5") == Approx(49.0f));
-		CHECK(vm.compileAndRun("4.5 + (10 * 3) + 5.5") == Approx(40.0f));
-		CHECK(vm.compileAndRun("4.5 + 10 * (3 + 5.5)") == Approx(89.5f));
-		CHECK(vm.compileAndRun("(4.5 + 10 * 3 + 5.5)") == Approx(40.0f));
-		CHECK(vm.compileAndRun("(4.5 + 10 * 3) + 5.5") == Approx(40.0f));
-		CHECK(vm.compileAndRun("4.5 + (10 * 3 + 5.5)") == Approx(40.0f));
+		CHECK(vm.compileAndRun("4.5 + 10 * 3 + 5.5").f_value == Approx(40.0f));
+		CHECK(vm.compileAndRun("(4.5 + 10) * 3 + 5.5").f_value == Approx(49.0f));
+		CHECK(vm.compileAndRun("4.5 + (10 * 3) + 5.5").f_value == Approx(40.0f));
+		CHECK(vm.compileAndRun("4.5 + 10 * (3 + 5.5)").f_value == Approx(89.5f));
+		CHECK(vm.compileAndRun("(4.5 + 10 * 3 + 5.5)").f_value == Approx(40.0f));
+		CHECK(vm.compileAndRun("(4.5 + 10 * 3) + 5.5").f_value == Approx(40.0f));
+		CHECK(vm.compileAndRun("4.5 + (10 * 3 + 5.5)").f_value == Approx(40.0f));
 	}
 
 	SECTION("Subtraction") {
-		CHECK(vm.compileAndRun("4.5 - 2") == Approx(2.5f));
-		CHECK(vm.compileAndRun("4.5 - 5") == Approx(-0.5f));
-		CHECK(vm.compileAndRun("2 * (4.5 - 5)") == Approx(-1.0f));
+		CHECK(vm.compileAndRun("4.5 - 2").f_value == Approx(2.5f));
+		CHECK(vm.compileAndRun("4.5 - 5").f_value == Approx(-0.5f));
+		CHECK(vm.compileAndRun("2 * (4.5 - 5)").f_value == Approx(-1.0f));
 	}
 	
 	SECTION("Unary minus") {
-		CHECK(vm.compileAndRun("-1") == Approx(-1.0f));
-		CHECK(vm.compileAndRun("-1 * 5") == Approx(-5.0f));
-		CHECK(vm.compileAndRun("1 * -5") == Approx(-5.0f));
-		CHECK(vm.compileAndRun("-1 * -5") == Approx(5.0f));
-		CHECK(vm.compileAndRun("(-1) * -5") == Approx(5.0f));
-		CHECK(vm.compileAndRun("2 * (-1 * -5)") == Approx(10.0f));
+		CHECK(vm.compileAndRun("-1").f_value == Approx(-1.0f));
+		CHECK(vm.compileAndRun("-1 * 5").f_value == Approx(-5.0f));
+		CHECK(vm.compileAndRun("1 * -5").f_value == Approx(-5.0f));
+		CHECK(vm.compileAndRun("-1 * -5").f_value == Approx(5.0f));
+		CHECK(vm.compileAndRun("(-1) * -5").f_value == Approx(5.0f));
+		CHECK(vm.compileAndRun("2 * (-1 * -5)").f_value == Approx(10.0f));
 	}
 
 	SECTION("Division") {
-		CHECK(vm.compileAndRun("5 / 2") == Approx(2.5f));
-		CHECK(vm.compileAndRun("2.5 / 2") == Approx(1.25f));
-		CHECK(vm.compileAndRun("1 / 2.0") == Approx(0.5f));
+		CHECK(vm.compileAndRun("5 / 2").f_value == Approx(2.5f));
+		CHECK(vm.compileAndRun("2.5 / 2").f_value == Approx(1.25f));
+		CHECK(vm.compileAndRun("1 / 2.0").f_value == Approx(0.5f));
 	}
 }
 
 
-
 TEST_CASE("Run", "Execute bytecode") {
 	SECTION("Multiply") {
-		CHECK(floatBinaryOperator(2, 4, Instruction::MUL_FLOAT) == Approx(8.0f));
-		CHECK(floatBinaryOperator(5, -4, Instruction::MUL_FLOAT) == Approx(-20.0f));
-		CHECK(floatBinaryOperator(3, 0, Instruction::MUL_FLOAT) == Approx(0.0f));
+		CHECK(floatBinaryOperator(2, 4, Instruction::MUL_FLOAT).f_value == Approx(8.0f));
+		CHECK(floatBinaryOperator(5, -4, Instruction::MUL_FLOAT).f_value == Approx(-20.0f));
+		CHECK(floatBinaryOperator(3, 0, Instruction::MUL_FLOAT).f_value == Approx(0.0f));
 	}
 
 	SECTION("Add") {
-		CHECK(floatBinaryOperator(2, 4, Instruction::ADD_FLOAT) == Approx(6.0f));
-		CHECK(floatBinaryOperator(5, -4, Instruction::ADD_FLOAT) == Approx(1.0f));
-		CHECK(floatBinaryOperator(3, 0, Instruction::ADD_FLOAT) == Approx(3.0f));
-		CHECK(floatBinaryOperator(3, -4, Instruction::ADD_FLOAT) == Approx(-1.0f));
+		CHECK(floatBinaryOperator(2, 4, Instruction::ADD_FLOAT).f_value == Approx(6.0f));
+		CHECK(floatBinaryOperator(5, -4, Instruction::ADD_FLOAT).f_value == Approx(1.0f));
+		CHECK(floatBinaryOperator(3, 0, Instruction::ADD_FLOAT).f_value == Approx(3.0f));
+		CHECK(floatBinaryOperator(3, -4, Instruction::ADD_FLOAT).f_value == Approx(-1.0f));
 	}
 }
