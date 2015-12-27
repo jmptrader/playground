@@ -100,25 +100,7 @@ public:
 
 
 private:
-	static int getOperatorPriority(const Token& token)
-	{
-		if (token.type == Token::IDENTIFIER) return 3;
-		if (token.type == Token::LEFT_PARENTHESIS) return -1;
-		if (token.type != Token::OPERATOR) DebugBreak();
-		switch (token.oper)
-		{
-			case Token::OR: return 0;
-			case Token::AND: return 1;
-			case Token::LESS_THAN: return 2;
-			case Token::GREATER_THAN: return 2;
-			case Token::ADD: return 3;
-			case Token::SUBTRACT: return 3;
-			case Token::MULTIPLY: return 4;
-			case Token::DIVIDE: return 4;
-			case Token::UNARY_MINUS: return 4;
-		}
-		return -1;
-	}
+	static int getOperatorPriority(const Token& token);
 
 
 	static bool isIdentifierChar(char c)
@@ -389,7 +371,8 @@ static const struct
 	Types ret_type;
 	Instruction::Type instr;
 	Types args[9];
-	
+	int priority;
+
 	int arity() const
 	{
 		for (int i = 0; i < sizeof(args) / sizeof(args[0]); ++i)
@@ -408,40 +391,65 @@ static const struct
 		return true;
 	}
 } OPERATOR_FUNCTIONS[] = {
-	{ExpressionCompiler::Token::ADD, Types::FLOAT, Instruction::ADD_FLOAT, {Types::FLOAT, Types::FLOAT, Types::NONE}},
+	{ExpressionCompiler::Token::ADD,
+		Types::FLOAT,
+		Instruction::ADD_FLOAT,
+		{Types::FLOAT, Types::FLOAT, Types::NONE},
+		3},
 	{ExpressionCompiler::Token::MULTIPLY,
 		Types::FLOAT,
 		Instruction::MUL_FLOAT,
-		{Types::FLOAT, Types::FLOAT, Types::NONE}},
+		{Types::FLOAT, Types::FLOAT, Types::NONE},
+		4},
 	{ExpressionCompiler::Token::DIVIDE,
 		Types::FLOAT,
 		Instruction::DIV_FLOAT,
-		{Types::FLOAT, Types::FLOAT, Types::NONE}},
+		{Types::FLOAT, Types::FLOAT, Types::NONE},
+		4},
 	{ExpressionCompiler::Token::SUBTRACT,
 		Types::FLOAT,
 		Instruction::SUB_FLOAT,
-		{Types::FLOAT, Types::FLOAT, Types::NONE}},
+		{Types::FLOAT, Types::FLOAT, Types::NONE},
+		3},
 	{ExpressionCompiler::Token::UNARY_MINUS,
 		Types::FLOAT,
 		Instruction::UNARY_MINUS,
-		{Types::FLOAT, Types::NONE}},
+		{Types::FLOAT, Types::NONE},
+		4},
 	{ExpressionCompiler::Token::LESS_THAN,
 		Types::BOOL,
 		Instruction::FLOAT_LT,
-		{Types::FLOAT, Types::FLOAT, Types::NONE}},
+		{Types::FLOAT, Types::FLOAT, Types::NONE},
+		2},
 	{ExpressionCompiler::Token::GREATER_THAN,
 		Types::BOOL,
 		Instruction::FLOAT_GT,
-		{Types::FLOAT, Types::FLOAT, Types::NONE}},
+		{Types::FLOAT, Types::FLOAT, Types::NONE},
+		2},
 	{ExpressionCompiler::Token::AND,
 		Types::BOOL,
 		Instruction::AND,
-		{ Types::BOOL, Types::BOOL, Types::NONE }},
+		{Types::BOOL, Types::BOOL, Types::NONE},
+		1},
 	{ExpressionCompiler::Token::OR,
 		Types::BOOL,
 		Instruction::OR,
-		{ Types::BOOL, Types::BOOL, Types::NONE }}
-};
+		{Types::BOOL, Types::BOOL, Types::NONE},
+		0}};
+
+
+int ExpressionCompiler::getOperatorPriority(const Token& token)
+{
+	if (token.type == Token::IDENTIFIER) return 3;
+	if (token.type == Token::LEFT_PARENTHESIS) return -1;
+	if (token.type != Token::OPERATOR) DebugBreak();
+	
+	for (auto& i : OPERATOR_FUNCTIONS)
+	{
+		if (i.op == token.oper) return i.priority;
+	}
+	return -1;
+}
 
 
 int ExpressionCompiler::compile(const char* src,
