@@ -21,9 +21,33 @@ solution "Playground"
 	language "C++"
 	startproject "expressions"
 	includedirs { "../3rdparty" }
-	
+
 project "expressions"
 	kind "ConsoleApp"
-	
+
 	files { "../src/expressions/main.cpp" }
+	defaultConfigurations()
+
+project "link_test_lua"
+	kind "StaticLib"
+
+	defines { "LUA_BUILD_AS_DLL" }
+
+	files { "../src/link_test/lua/*.c", "../src/link_test/lua/*.h", "../src/link_test/lua/*.def", "genie.lua"  }
+	defaultConfigurations()
+
+project "link_test_dll"
+	kind "SharedLib"
+
+	linkoptions {"/DEF:\"../../src/link_test/lua/lua.def\""}
+	files { "../src/link_test/dll.cpp" }
+	links { "link_test_lua" }
+	defaultConfigurations()
+
+project "link_test_main"
+	kind "ConsoleApp"
+
+	defines {"LUA_BUILD_AS_DLL"}
+	files { "../src/link_test/main.cpp" }
+	links { "link_test_dll" }
 	defaultConfigurations()
