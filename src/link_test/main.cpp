@@ -8,5 +8,5 @@ extern "C"
 int main()
 {
 	auto x = luaL_newstate();
-	x =x ;
+	return x != nullptr ? 0 : 1;
 }

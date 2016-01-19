@@ -31,15 +31,13 @@ project "expressions"
 project "link_test_lua"
 	kind "StaticLib"
 
-	defines { "LUA_BUILD_AS_DLL" }
-
-	files { "../src/link_test/lua/*.c", "../src/link_test/lua/*.h", "../src/link_test/lua/*.def", "genie.lua"  }
+	files { "../3rdparty/lua/*.c", "../3rdparty/lua/*.h", "../3rdparty/lua/*.def", "genie.lua"  }
 	defaultConfigurations()
 
 project "link_test_dll"
 	kind "SharedLib"
 
-	linkoptions {"/DEF:\"../../src/link_test/lua/lua.def\""}
+	linkoptions {"/DEF:\"../../3rdparty/lua/lua.def\""}
 	files { "../src/link_test/dll.cpp" }
 	links { "link_test_lua" }
 	defaultConfigurations()
