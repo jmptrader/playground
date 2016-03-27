@@ -19,13 +19,20 @@ solution "Playground"
 	flags { "FatalWarnings", "NoPCH" }
 	location "tmp"
 	language "C++"
-	startproject "expressions"
+	startproject "imgui_example"
 	includedirs { "../3rdparty" }
 
 project "expressions"
 	kind "ConsoleApp"
 
-	files { "../src/expressions/main.cpp" }
+	files { "../src/expressions/main.cpp", "genie.lua" }
+	defaultConfigurations()
+
+project "imgui_example"
+	kind "WindowedApp"
+
+	links { "opengl32" }
+	files { "../3rdparty/imgui/*.cpp", "../3rdparty/imgui/*.h", "../src/imgui_example/main.cpp", "genie.lua" }
 	defaultConfigurations()
 
 project "link_test_lua"
@@ -38,7 +45,7 @@ project "link_test_dll"
 	kind "SharedLib"
 
 	linkoptions {"/DEF:\"../../3rdparty/lua/lua.def\""}
-	files { "../src/link_test/dll.cpp" }
+	files { "../src/link_test/dll.cpp", "genie.lua" }
 	links { "link_test_lua" }
 	defaultConfigurations()
 
@@ -46,6 +53,6 @@ project "link_test_main"
 	kind "ConsoleApp"
 
 	defines {"LUA_BUILD_AS_DLL"}
-	files { "../src/link_test/main.cpp" }
+	files { "../src/link_test/main.cpp", "genie.lua" }
 	links { "link_test_dll" }
 	defaultConfigurations()

@@ -564,7 +564,7 @@ int ExpressionCompiler::compile(const char* src,
 		default: DebugBreak(); break;
 	}
 	++out;
-	return out - byte_code;
+	return int(out - byte_code);
 }
 
 
@@ -587,7 +587,7 @@ int ExpressionCompiler::tokenize(const char* src, Token* tokens, int max_size)
 	bool binary = false;
 	while (*c)
 	{
-		ExpressionCompiler::Token token = { Token::EMPTY, c - src };
+		ExpressionCompiler::Token token = { Token::EMPTY, int(c - src) };
 
 		for (auto& i : OPERATORS)
 		{
@@ -625,11 +625,11 @@ int ExpressionCompiler::tokenize(const char* src, Token* tokens, int max_size)
 		{
 			if (isIdentifierChar(*c))
 			{
-				token.offset = c - src;
+				token.offset = int(c - src);
 				++c;
 				token.type = Token::IDENTIFIER;
 				while (isIdentifierChar(*c)) ++c;
-				token.size = (c - src) - token.offset;
+				token.size = int(c - src) - token.offset;
 				--c;
 			}
 			else if (*c == '(')

@@ -748,6 +748,7 @@ union luai_Cast { double l_d; long l_l; };
 
 #endif
 
+#pragma warning( disable : 4334)
 
 
 /* =================================================================== */
