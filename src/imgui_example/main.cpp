@@ -1,20 +1,207 @@
 #include <windows.h>
 #include <GL/gl.h>
 #include <GL/glu.h>
-#include <stdio.h>
+#include <cstdio>
+#include <cstring>
 #include "imgui/imgui.h"
+#include <vector>
 
 
 HWND g_hWnd;
 HDC g_hDC;
 HGLRC g_hRC;
 GLuint g_font_texture;
+static const int MAX_PATH_LENGTH = 256;
+typedef char Path[MAX_PATH_LENGTH];
+typedef unsigned int u32;
+
+
+const char* findSubstring(const char* haystack, const char* needle)
+{
+	return strstr(haystack, needle);
+}
+
+
+void copyString(char* dest, const char* src)
+{
+	strcpy(dest, src);
+}
+
+
+void catString(char* dest, const char* src)
+{
+	strcat(dest, src);
+}
+
+
+int compareString(const char* a, const char* b)
+{
+	return strcmp(a, b);
+}
+
+
+int compareIString(const char* a, const char* b)
+{
+	return _stricmp(a, b);
+}
+
+struct File
+{
+	enum Flags
+	{
+		SELECTED = 1,
+		DIRECTORY = 2
+	};
+
+	Path name;
+	size_t size;
+	u32 flags;
+};
+
+
+struct Files
+{
+	std::vector<File> files;
+	Path path;
+	char filter[50];
+} g_files;
+
+
+enum class Columns
+{
+	NAME,
+	SIZE
+};
+
+
+void sortBy(Columns column)
+{
+	if (column == Columns::NAME)
+	{
+		auto cmpFiles = [](const void* a, const void* b) -> int {
+			auto* f0 = static_cast<const File*>(a);
+			auto* f1 = static_cast<const File*>(b);
+			bool is_f0_dir = (f0->flags & File::DIRECTORY) != 0;
+			bool is_f1_dir = (f1->flags & File::DIRECTORY) != 0;
+			if (f0->name[0] == '.') return -1;
+			if (f1->name[0] == '.') return 1;
+			if (is_f0_dir && !is_f1_dir) return -1;
+			if (is_f1_dir && !is_f0_dir) return 1;
+			auto x = -compareIString(f1->name, f0->name);
+			return x;
+		};
+
+		qsort(&g_files.files[0], g_files.files.size(), sizeof(g_files.files[0]), cmpFiles);
+	}
+	else
+	{
+		auto cmpFiles = [](const void* a, const void* b) -> int {
+			auto* f0 = static_cast<const File*>(a);
+			auto* f1 = static_cast<const File*>(b);
+			bool is_f0_dir = (f0->flags & File::DIRECTORY) != 0;
+			bool is_f1_dir = (f1->flags & File::DIRECTORY) != 0;
+			if (is_f0_dir && !is_f1_dir) return 1;
+			if (is_f1_dir && !is_f0_dir) return -1;
+			if (f0->name[0] == '.') return -1;
+			if (f1->name[0] == '.') return 1;
+			return int(f1->size - f0->size);
+		};
+
+		qsort(&g_files.files[0], g_files.files.size(), sizeof(g_files.files[0]), cmpFiles);
+	}
+}
+
+
+void normalizePath(Path& dest, const char* src)
+{
+	copyString(dest, src);
+}
+
+
+void fillFileList(const char* path)
+{
+	g_files.filter[0] = 0;
+	WIN32_FIND_DATA ffd = {};
+	Path ffd_path;
+	normalizePath(ffd_path, path);
+	catString(ffd_path, "/*");
+	HANDLE handle = FindFirstFile(ffd_path, &ffd);
+	if (!handle) return;
+	copyString(g_files.path, path);
+	g_files.files.reserve(4096);
+	g_files.files.clear();
+	do
+	{
+		if (ffd.cFileName[0] == '.' && ffd.cFileName[1] != '.') continue;
+		g_files.files.emplace_back();
+		auto& tmp = g_files.files.back();
+		tmp.flags = (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0 ? File::DIRECTORY : 0;
+		tmp.size = ffd.nFileSizeLow;
+		copyString(tmp.name, ffd.cFileName);
+	} while (FindNextFile(handle, &ffd));
+
+	if (g_files.files.empty()) return;
+	sortBy(Columns::NAME);
+}
+
+
+void showFileList()
+{
+	if (g_files.files.empty()) return;
+
+	if (ImGui::InputText("", g_files.path, sizeof(g_files.path), ImGuiInputTextFlags_EnterReturnsTrue))
+	{
+		fillFileList(g_files.path);
+	}
+
+	ImGui::Columns(2);
+	if (ImGui::Selectable("Name")) sortBy(Columns::NAME);
+	ImGui::NextColumn();
+	if (ImGui::Selectable("Size")) sortBy(Columns::SIZE);
+	ImGui::NextColumn();
+	ImGui::Separator();
+	for (auto& file : g_files.files)
+	{
+		if (g_files.filter[0] != 0 && !findSubstring(file.name, g_files.filter)) continue;
+
+		bool selected = file.flags & File::SELECTED;
+		if (ImGui::Selectable(file.name, selected, ImGuiSelectableFlags_AllowDoubleClick) &&
+			file.flags & File::DIRECTORY)
+		{
+			Path tmp;
+			copyString(tmp, g_files.path);
+			catString(tmp, "/");
+			catString(tmp, file.name);
+			fillFileList(tmp);
+			ImGui::Columns();
+			return;
+		}
+		ImGui::NextColumn();
+		if (file.flags & File::DIRECTORY)
+		{
+			ImGui::Text("DIR");
+		}
+		else
+		{
+			ImGui::Text("%16lu B", file.size);
+		}
+		ImGui::NextColumn();
+	}
+	ImGui::Columns();
+	ImGui::InputText("Filter", g_files.filter, sizeof(g_files.filter));
+}
+
 
 
 void onGUI()
 {
+	auto& io = ImGui::GetIO();
+	io.KeyShift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+	io.KeyCtrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+	io.KeyCtrl = (GetKeyState(VK_MENU) & 0x8000) != 0;
+
 	ImGui::NewFrame();
-	ImGui::ShowTestWindow();
+	showFileList();
 	ImGui::EndFrame();
 }
 
@@ -254,6 +441,10 @@ bool init()
 
 	ShowWindow(g_hWnd, SW_SHOW);
 	initImGUI();
+
+	Path tmp;
+	GetCurrentDirectory(sizeof(tmp), tmp);
+	fillFileList(tmp);
 	return true;
 }
 

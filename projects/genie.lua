@@ -31,6 +31,7 @@ project "expressions"
 project "imgui_example"
 	kind "WindowedApp"
 
+	defines { "_CRT_SECURE_NO_WARNINGS" }
 	links { "opengl32" }
 	files { "../3rdparty/imgui/*.cpp", "../3rdparty/imgui/*.h", "../src/imgui_example/main.cpp", "genie.lua" }
 	defaultConfigurations()
