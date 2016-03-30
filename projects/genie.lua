@@ -1,4 +1,6 @@
-local BINARY_DIR = "tmp/bin/"
+local ide_dir = iif(_ACTION == nil, "vs2013", _ACTION)
+local LOCATION = "tmp/" .. ide_dir
+local BINARY_DIR = LOCATION .. "/bin/"
 
 function defaultConfigurations()
 	configuration "Debug"
@@ -17,7 +19,7 @@ solution "Playground"
 	configurations { "Debug", "Release" }
 	platforms { "x32", "x64" }
 	flags { "FatalWarnings", "NoPCH" }
-	location "tmp"
+	location(LOCATION)
 	language "C++"
 	startproject "imgui_example"
 	includedirs { "../3rdparty" }
@@ -27,6 +29,16 @@ project "expressions"
 
 	files { "../src/expressions/main.cpp", "genie.lua" }
 	defaultConfigurations()
+
+project "minimal_exe"
+	kind "ConsoleApp"
+
+	files { "../src/minimal_exe/main.cpp", "genie.lua" }
+	defaultConfigurations()
+	
+	configuration "Release"
+		flags { "NoExceptions", "NoFramePointer", "NoIncrementalLink", "NoRTTI", "OptimizeSize", "No64BitChecks" }
+		linkoptions { "/NODEFAULTLIB"}
 
 project "imgui_example"
 	kind "WindowedApp"
@@ -45,7 +57,7 @@ project "link_test_lua"
 project "link_test_dll"
 	kind "SharedLib"
 
-	linkoptions {"/DEF:\"../../3rdparty/lua/lua.def\""}
+	linkoptions {"/DEF:\"../../../3rdparty/lua/lua.def\""}
 	files { "../src/link_test/dll.cpp", "genie.lua" }
 	links { "link_test_lua" }
 	defaultConfigurations()

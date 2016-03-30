@@ -19,3 +19,5 @@ All required 3rd party libraries are in directory 3rdparty.
 
 * [Expressions - simple math parser and evaluator](src/expressions)
 * [Link test - export symbols from static library through dll](src/link_test)
+* [ImGui example - basic imgui app](src/imgui_example)
+* [Minimal exe - smallest possible executable](src/minimal_exe)
