@@ -39,6 +39,7 @@ project "minimal_exe"
 	configuration "Release"
 		flags { "NoExceptions", "NoFramePointer", "NoIncrementalLink", "NoRTTI", "OptimizeSize", "No64BitChecks" }
 		linkoptions { "/NODEFAULTLIB"}
+		linkoptions { "/MANIFEST:NO"}
 
 project "imgui_example"
 	kind "WindowedApp"
