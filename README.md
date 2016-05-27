@@ -27,3 +27,4 @@ All required 3rd party libraries are in directory 3rdparty.
 * Debugger with Linux support
 * Advanced Github issue system
 * File manager
+* Rust Hello World
